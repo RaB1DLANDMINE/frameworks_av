@@ -4174,6 +4174,11 @@ status_t CameraService::onTransact(uint32_t code, const Parcel& data, Parcel* re
         }
     }
 
+    // Let the extension handle it first
+    if (CameraServiceExtFactory::onTransact(code, data, reply, flags) == 0) {
+        return NO_ERROR;
+    }
+
     return BnCameraService::onTransact(code, data, reply, flags);
 }
 
