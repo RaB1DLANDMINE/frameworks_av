@@ -1124,6 +1124,7 @@ status_t StagefrightRecorder::setParameter(
         int32_t percent;
         if (safe_strtoi32(value.c_str(), &percent)) {
             return setRTPVidEncCoeffPercent(percent);
+        }
     } else if (key == "log-session-id") {
         return setLogSessionId(value);
     } else if (key == "OplusUserData") {
