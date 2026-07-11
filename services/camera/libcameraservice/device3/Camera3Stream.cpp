@@ -777,6 +777,7 @@ status_t Camera3Stream::returnBuffer(const camera_stream_buffer &buffer,
     removeOutstandingBuffer(buffer);
 
     // Buffer status may be changed, so make a copy of the stream_buffer struct.
+    camera_stream_buffer b = buffer;
 #ifdef ALLOW_NONINCREASING_TIMESTAMPS
     (void)timestampIncreasing;
 #else
