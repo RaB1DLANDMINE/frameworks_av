@@ -2172,7 +2172,7 @@ status_t StagefrightRecorder::setupVideoEncoder(
     sp<MediaCodecSource> encoder = MediaCodecSource::Create(
             mLooper, format, cameraSource, mPersistentSurface, flags);
     if (encoder == NULL) {
-        ALOGE("Failed to create video encoder");
+        ALOGE("[PATCH OPLUS] FATAL: Failed to create video encoder!");
         // When the encoder fails to be created, we need
         // release the camera source due to the camera's lock
         // and unlock mechanism.
