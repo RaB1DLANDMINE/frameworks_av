@@ -2320,6 +2320,11 @@ void StagefrightRecorder::setupMPEG4orWEBMMetaData(sp<MetaData> *meta) {
         (*meta)->setInt32(kKeyEmptyTrackMalFormed, true);
         (*meta)->setInt32(kKey4BitTrackIds, true);
     }
+
+    // [PATCH OPLUSHDR] Pass metadata to MPEG4Writer
+    if (!mOplusUserData.empty()) {
+        (*meta)->setCString(kKeyOplusUserData, mOplusUserData.c_str());
+    }
 }
 
 status_t StagefrightRecorder::pause() {
