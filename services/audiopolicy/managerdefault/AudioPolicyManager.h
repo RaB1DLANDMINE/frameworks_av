@@ -764,6 +764,13 @@ protected:
                                        audio_policy_dev_state_t state,
                                        std::set<audio_io_handle_t>& outputs);
 
+        // LHDC / software-A2DP: returns true when the given device is a Bluetooth
+        // A2DP output whose negotiated codec cannot be hardware-offloaded by the
+        // "primary" (PAL) module (e.g. LHDC, tagged AUDIO_FORMAT_LHDC). Such codecs
+        // must be served by the software "bluetooth" (ModuleBluetooth) module, so
+        // the primary module is excluded from routing for that device.
+        bool a2dpRequiresSoftwareModule(const sp<DeviceDescriptor>& device) const;
+
         status_t checkInputsForDevice(const sp<DeviceDescriptor>& device,
                                       audio_policy_dev_state_t state);
 

@@ -186,7 +186,15 @@ status_t AudioPolicyManager::setDeviceConnectionStateInt(audio_devices_t deviceT
 
 void AudioPolicyManager::addRoutableDeviceToProfiles(const sp<DeviceDescriptor> &device)
 {
+    // LHDC / software-A2DP: for A2DP codecs the primary (offload) module cannot
+    // offload (e.g. LHDC), exclude the primary module so the software "bluetooth"
+    // module is the only route for this device.
+    const bool forceSoftwareA2dp = a2dpRequiresSoftwareModule(device);
     for (auto &hwModule: mHwModules) {
+        if (forceSoftwareA2dp &&
+                strcmp(hwModule->getName(), AUDIO_HARDWARE_MODULE_ID_PRIMARY) == 0) {
+            continue;
+        }
         const auto& profiles = audio_is_output_device(device->type())
               ? hwModule->getOutputProfiles() : hwModule->getInputProfiles();
 
@@ -6965,6 +6973,33 @@ void AudioPolicyManager::onNewAudioModulesAvailableInt(DeviceVector *newDevices)
         }
         mHwModules.push_back(hwModule);
 
+        // LHDC / software-A2DP support (QTI SM8xxx):
+        // The "primary" (PAL) module advertises the A2DP output devices but can
+        // only drive the DSP hardware-offload datapath. Non-offloadable codecs
+        // (e.g. LHDC) therefore negotiate fine yet play silent, because PAL keeps
+        // requesting the A2DP_HARDWARE_OFFLOAD session while the BT stack opened a
+        // software session. When A2DP offload is disabled
+        // (persist.bluetooth.a2dp_offload.disabled=true) strip the A2DP output
+        // devices from the primary module's output profiles so the connected A2DP
+        // device is served instead by the software "bluetooth" (ModuleBluetooth)
+        // module, which host-encodes PCM via the BT AIDL software session.
+        if (strcmp(hwModule->getName(), AUDIO_HARDWARE_MODULE_ID_PRIMARY) == 0 &&
+                property_get_bool("persist.bluetooth.a2dp_offload.disabled", false)) {
+            for (const auto& outProfile : hwModule->getOutputProfiles()) {
+                DeviceVector keptDevices;
+                for (const auto& dev : outProfile->getSupportedDevices()) {
+                    if (!audio_is_a2dp_out_device(dev->type())) {
+                        keptDevices.add(dev);
+                    }
+                }
+                if (keptDevices.size() != outProfile->getSupportedDevices().size()) {
+                    ALOGI("%s: software-A2DP: removing A2DP from primary output "
+                          "profile %s", __func__, outProfile->getTagName().c_str());
+                    outProfile->setSupportedDevices(keptDevices);
+                }
+            }
+        }
+
         if (com_android_media_audioserver_mmap_pcm_offload_support()) {
             if (property_get_bool("ro.audio.mmap_offload_exclusive", false /*default_value*/)) {
                 // When `ro.audio.mmap_offload_exclusive` is set to true,
@@ -7175,10 +7210,40 @@ void AudioPolicyManager::addInput(audio_io_handle_t input,
     nextAudioPortGeneration();
 }
 
+bool AudioPolicyManager::a2dpRequiresSoftwareModule(const sp<DeviceDescriptor>& device) const
+{
+    if (device == nullptr || !audio_is_a2dp_out_device(device->type())) {
+        return false;
+    }
+    const audio_format_t fmt = device->getEncodedFormat();
+    // Codec not negotiated yet: keep default (offload) routing. A later codec
+    // config change re-evaluates once the real format is known.
+    if (fmt == AUDIO_FORMAT_DEFAULT) {
+        return false;
+    }
+    sp<HwModule> primaryModule = mHwModules.getModuleFromName(AUDIO_HARDWARE_MODULE_ID_PRIMARY);
+    if (primaryModule == nullptr) {
+        return false;
+    }
+    // If the primary (offload) module advertises this codec as an offloadable A2DP
+    // encoded format, keep it on primary. Otherwise (e.g. LHDC) it must be served
+    // by the software "bluetooth" module.
+    const DeviceVector a2dpDevices = primaryModule->getDeclaredDevices().getDevicesFromTypes(
+            getAudioDeviceOutAllA2dpSet());
+    for (const auto& a2dpDevice : a2dpDevices) {
+        const auto& formats = a2dpDevice->encodedFormats();
+        if (std::find(formats.begin(), formats.end(), fmt) != formats.end()) {
+            return false;
+        }
+    }
+    return true;
+}
+
 status_t AudioPolicyManager::checkOutputsForDevice(const sp<DeviceDescriptor>& device,
                                                    audio_policy_dev_state_t state,
                                                    std::set<audio_io_handle_t>& outputs)
 {
+    const bool forceSoftwareA2dp = a2dpRequiresSoftwareModule(device);
     audio_devices_t deviceType = device->type();
     const String8 &address = String8(device->address().c_str());
     sp<SwAudioOutputDescriptor> desc;
@@ -7202,6 +7267,14 @@ status_t AudioPolicyManager::checkOutputsForDevice(const sp<DeviceDescriptor>& d
             desc = mOutputs.valueAt(i);
             if (!desc->isDuplicated() && desc->routesToDevice(device)
                     && desc->devicesSupportEncodedFormats({deviceType})) {
+                // LHDC / software-A2DP: skip primary (offload) module outputs for
+                // A2DP codecs it cannot offload.
+                if (forceSoftwareA2dp && desc->mProfile != nullptr
+                        && desc->mProfile->getModule() != nullptr
+                        && strcmp(desc->mProfile->getModule()->getName(),
+                                  AUDIO_HARDWARE_MODULE_ID_PRIMARY) == 0) {
+                    continue;
+                }
                 ALOGV("checkOutputsForDevice(): adding opened output %d on device %s",
                       mOutputs.keyAt(i), device->toString().c_str());
                 outputs.insert(mOutputs.keyAt(i));
@@ -7210,6 +7283,12 @@ status_t AudioPolicyManager::checkOutputsForDevice(const sp<DeviceDescriptor>& d
         // then look for output profiles that can be routed to this device
         std::set< sp<IOProfile> > profiles;
         for (const auto& hwModule : mHwModules) {
+            // LHDC / software-A2DP: exclude the primary (offload) module for A2DP
+            // codecs it cannot offload, so the software "bluetooth" module is used.
+            if (forceSoftwareA2dp &&
+                    strcmp(hwModule->getName(), AUDIO_HARDWARE_MODULE_ID_PRIMARY) == 0) {
+                continue;
+            }
             for (size_t j = 0; j < hwModule->getOutputProfiles().size(); j++) {
                 sp<IOProfile> profile = hwModule->getOutputProfiles()[j];
                 if (profile->routesToDevice(device)) {
